@@ -1,4 +1,7 @@
-# ssh-copy-id -p 9222 admin@192.168.31.127 
+# Custom mutator based on logs
+# 
+# Before you run the program, public key for ssh should have been copied to 
+# the server. For example, `ssh-copy-id -p 9222 admin@192.168.31.127`
 
 
 from boofuzz.monitors import BaseMonitor
@@ -6,7 +9,7 @@ import collections
 import paramiko
 
 # If these keywords appears in the log content, we assumes there is a crash.
-CRASH_KEYWORDS = ['error', 'segfault']
+CRASH_KEYWORDS = ['nfsd: got error', 'segfault']
 
 class LogMonitor(BaseMonitor):
     def __init__(self, host, port, user='admin', pkey_file='/home/peng/.ssh/id_rsa'):
@@ -39,7 +42,8 @@ class LogMonitor(BaseMonitor):
             timestamp, log_content = line.strip().split(' ', 1)
             self.logs[timestamp] = log_content
 
-        # If there are new logs, we traverse them to find if a crash keyword is in them.
+        # If there are new logs, we traverse them to find if a crash keyword is 
+        # in them.
         new_logs_num = len(self.logs) - prev_logs_num
         if new_logs_num > 0:
             crash_flag = False

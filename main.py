@@ -5,6 +5,8 @@
 # Reference: https://github.com/jtpereyda/boofuzz-ftp/blob/master/ftp.py
 # NFS Specification: RFC 1813
 
+# Usage: python main.py fuzz
+
 import re
 import sys
 
@@ -22,6 +24,21 @@ current_module = sys.modules[__name__]
 
 class FuzzNfsException(Exception):
     pass
+
+
+class RpcMessage(object):
+
+    def __init__(self):
+        pass
+
+    def parse(self, data):
+        pass
+
+    def get_bytes(self):
+        pass
+
+    def get_contents(self):
+        pass
 
 
 def check_reply_code(target, fuzz_data_logger, session, test_case_context, *args, **kwargs):
@@ -49,25 +66,27 @@ def check_reply_code(target, fuzz_data_logger, session, test_case_context, *args
             fuzz_data_logger.log_fail(str(e))
         fuzz_data_logger.log_pass()
 
-# TODO: Check if the Status is NFS3_OK
+
 def parse_nfs_reply(data):
     """
     Parse NFS reply and return reply code. Raise FuzzNfsException if reply is invalid.
     
-    RFC 1813 excerpt:
+    RFC 1813:
+    
+    2.5 Basic Data Types
           
     Args:
         data (bytes): Raw reply data
     """
-    status_code_len = 4
-    if len(data) < status_code_len:
+    # RPC header(28 bytes) and NFS status(4 bytes)
+    if len(data) < 28 + 4:
         raise FuzzNfsException("Invalid NFS reply, too short.")
     else:
-        # TODO: not only accept NFS3_OK status
-        if data[:4] != b'0x0000':
-            raise FuzzNfsException("Invalid NFS reply, the status is not NFS3_OK.")
+        nfs_status = int.from_bytes(data[28:32], 'big')
+        if nfs_status < 0 or nfs_status > 10008:
+            raise FuzzNfsException("Invalid NFS reply, the status is invalid.")
         else:
-            return data[0:5]
+            return nfs_status
 
 
 @click.group()
@@ -78,8 +97,8 @@ def cli():
 @click.command()
 @click.option('--target-host', help='Host or IP address of target', prompt=True, default='192.168.31.127')
 @click.option('--target-port', type=int, default=2049, help='Network port of target')
-@click.option('--ssh-username', default='admin', help='SSH username, used by the log monitor')
-@click.option('--ssh-port', default=22, help='SSH port of the target')
+@click.option('--ssh-username', default='admin', help='SSH username, used by the log monitor', prompt=True)
+@click.option('--ssh-port', default=22, help='SSH port of the target', prompt=True)
 @click.option('--test-case-index', help='Test case index', type=str)
 @click.option('--test-case-name', help='Name of node or specific test case')
 @click.option('--csv-out', help='Output to CSV file')
@@ -181,7 +200,6 @@ def fuzz(target_cmdline, target_host, target_port, ssh_username, ssh_port,
         procmon.stop_target()
 
 
-# TODO: customize the nfs format
 def initialize_nfs(session):
     null = _rpc_cmd('NULL')
     getattribute = _rpc_cmd('GETATTR')
@@ -207,7 +225,7 @@ def _rpc_cmd(proc_name='NULL'):
             Size('fragment-length', block_name='RPC-Body', endian='>', length=2, fuzzable=False),
         )),
         Block('RPC-Body', children=(
-            DWord('xid', default_value=0x5756a477, endian='>', fuzzable=False),
+            DWord('xid', default_value=0x5756a477, endian='>', fuzzable=True),
             # Message Type: Call(0)
             DWord('message-type', default_value=0, endian='>', fuzzable=False),
             # RPC Version: 2
@@ -217,8 +235,6 @@ def _rpc_cmd(proc_name='NULL'):
             # Program Version: 3
             DWord('program-version', default_value=3, endian='>', fuzzable=False),
             # Procedure: GETATTR/LOOKUP/SETATTR...
-            # DWord('procedure', default_value=1, endian='>', fuzzable=False),
-            # DWord('procedure', default_value=eval(f'NFSPROC3_{proc_name.upper()}'), endian='>', fuzzable=False),
             DWord('procedure', default_value=NFS_PROC_CODES[proc_name], endian='>', fuzzable=False),
             Bytes(
                 'credentials', 
@@ -238,8 +254,6 @@ def _rpc_cmd(proc_name='NULL'):
 
             # Call the corresponse function to get an NFS block
             getattr(current_module, f'_nfs_proc_{proc_name.lower()}')(),
-            # getattr(current_module, f'_nfs_proc_lookup')(),
-            # eval(f'_nfs_proc_{proc_name.lower()}()')
         )),
     ))
 
@@ -250,15 +264,14 @@ def _nfs_proc_null():
 def _nfs_proc_getattr():
     # nfs object
     return Block('NFS-GETATTR', children=(
-        Size('length', block_name='filehandle', endian='>', length=4, fuzzable=False),
-        Bytes(
-            'filehandle', size=28, fuzzable=True,
-            default_value=b'\x01\x00\x07\x00\x00\x01\x00\x00\x00\x00\x00\x00\xef\x40\xe7\x82' \
-                          b'\xae\x34\x01\xab\x00\x00\x00\x00\x00\x00\x00\x00',
-        ),
-        # Size('name-length', block_name='contents', endian='>', length=4, fuzzable=False),
-        # String('contents', default_value='.Trash', encoding='ascii', fuzzable=True),
-        # Bytes('fill-bytes', size=2, default_value=b'\x00\x00', fuzzable=False),
+        _nfs_object(),
+    ))
+
+def _nfs_proc_setattr():
+    return Block('NFS-SETATTR', children=(
+        _nfs_object(),
+        _nfs_new_attributes(),
+        DWord('guard', default_value=0x0, endian='>', fuzzable=False)
     ))
 
 def _nfs_proc_lookup():
@@ -279,6 +292,54 @@ def _nfs_proc_lookup():
         Bytes('fill-bytes', size=2, default_value=b'\x00\x00', fuzzable=False),
     ))
 
+def _nfs_proc_access():
+    return Block('NFS-ACCESS', children=(
+        Size('dir-length', block_name='filehandle', endian='>', length=4, fuzzable=False),
+        Bytes(
+            'filehandle', size=28, fuzzable=True,
+            default_value=b'\x01\x00\x07\x00\x00\x01\x00\x00\x00\x00\x00\x00\xef\x40\xe7\x82' \
+                          b'\xae\x34\x01\xab\x00\x00\x00\x00\x00\x00\x00\x00',
+        ),
+        DWord('check-access', default_value=0x1f, endian='>', fuzzable=False),
+    ))
+
+def _nfs_proc_read():
+    return Block('NFS-READ', children=(
+        _nfs_object(),
+        QWord('offset', default_value=0, endian='>', fuzzable=True),
+        DWord('count', default_value=6, endian='>', fuzzable=True),
+    ))
+
+def _nfs_proc_write():
+    return Block('NFS-WRITE', children=(
+        _nfs_object(),
+        QWord('offset', default_value=0, endian='>', fuzzable=True),
+        DWord('count', default_value=6, endian='>', fuzzable=True),
+        DWord('stable', default_value=2, endian='>', fuzzable=True),
+        Block('data', children=(
+            Size('length', block_name='contents', endian='>', length=4, fuzzable=False),
+            RandomData('contents', default_value=b'\x68\x65\x6c\x6c\x6f\x0a', fuzzable=True),
+        ))
+    ))
+
+def _nfs_proc_create():
+    return Block('NFS-CREATE', children=(
+        # where
+        # -- dir
+        Size('dir-length', block_name='filehandle', endian='>', length=4, fuzzable=False),
+        Bytes(
+            'filehandle', size=28, fuzzable=True,
+            default_value=b'\x01\x00\x07\x00\x00\x01\x00\x00\x00\x00\x00\x00\xef\x40\xe7\x82' \
+                          b'\xae\x34\x01\xab\x00\x00\x00\x00\x00\x00\x00\x00',
+        ),
+        # -- name
+        Size('name-length', block_name='contents', endian='>', length=4, fuzzable=False),
+        String('contents', default_value='abcdabcd', encoding='ascii', fuzzable=True),
+
+        DWord('create-mode', default_value=0, endian='>', fuzzalbe=True),
+        _nfs_object()
+    ))
+
 def _nfs_proc_readdirplus():
     return Block('NFS-READDIRPLUS', children=(
         # -- dir
@@ -294,22 +355,8 @@ def _nfs_proc_readdirplus():
         DWord('maxcount', default_value=4096, endian='>', fuzzable=False),
     ))
 
-def _nfs_proc_access():
-    return Block('NFS-ACCESS', children=(
-        Size('dir-length', block_name='filehandle', endian='>', length=4, fuzzable=False),
-        Bytes(
-            'filehandle', size=28, fuzzable=True,
-            default_value=b'\x01\x00\x07\x00\x00\x01\x00\x00\x00\x00\x00\x00\xef\x40\xe7\x82' \
-                          b'\xae\x34\x01\xab\x00\x00\x00\x00\x00\x00\x00\x00',
-        ),
-        DWord('check-access', default_value=0x1f, endian='>', fuzzable=False),
-    ))
-
 def _nfs_proc_fsstat():
     return _nfs_object()
-
-def _nfs_proc_setattr():
-    pass
 
 def _nfs_object(filehandle=None):
     return Block('NFS-Object', children=(
@@ -319,6 +366,19 @@ def _nfs_object(filehandle=None):
             default_value=b'\x01\x00\x07\x00\x00\x01\x00\x00\x00\x00\x00\x00\xef\x40\xe7\x82' \
                           b'\xae\x34\x01\xab\x00\x00\x00\x00\x00\x00\x00\x00',
         ),
+    ))
+
+def _nfs_new_attributes():
+    return Block('NFS-NEW-ATTRIBUTES', children=(
+        Block('mode', children=(
+            DWord('set-it', default_value=0x1, endian='>', fuzzable=True),
+            DWord('mode-value', default_value=0x01ed, endian='>', fuzzable=True),
+        )),
+        DWord('uid', default_value=0x0, endian='>', fuzzable=True),
+        DWord('gid', default_value=0x0, endian='>', fuzzable=True),
+        DWord('size', default_value=0x0, endian='>', fuzzable=True),
+        DWord('atime', default_value=0x0, endian='>', fuzzable=True),
+        DWord('mtime', default_value=0x0, endian='>', fuzzable=True),
     ))
 
 
