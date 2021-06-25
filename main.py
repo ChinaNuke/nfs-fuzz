@@ -95,7 +95,7 @@ def cli():
 
 
 @click.command()
-@click.option('--target-host', help='Host or IP address of target', prompt=True, default='192.168.31.127')
+@click.option('--target-host', help='Host or IP address of target', prompt=True, default='192.168.2.185')
 @click.option('--target-port', type=int, default=2049, help='Network port of target')
 @click.option('--ssh-username', default='admin', help='SSH username, used by the log monitor', prompt=True)
 @click.option('--ssh-port', default=22, help='SSH port of the target', prompt=True)
@@ -271,7 +271,7 @@ def _nfs_proc_setattr():
     return Block('NFS-SETATTR', children=(
         _nfs_object(),
         _nfs_new_attributes(),
-        DWord('guard', default_value=0x0, endian='>', fuzzable=False)
+        DWord('guard', default_value=0x0, endian='>', fuzzable=True)
     ))
 
 def _nfs_proc_lookup():
@@ -289,7 +289,7 @@ def _nfs_proc_lookup():
         String('contents', default_value='.Trash', encoding='ascii', fuzzable=True),
 
         # TODO: calculate the correct padding
-        Bytes('fill-bytes', size=2, default_value=b'\x00\x00', fuzzable=False),
+        Bytes('fill-bytes', size=2, default_value=b'\x00\x00', fuzzable=True),
     ))
 
 def _nfs_proc_access():
@@ -300,7 +300,7 @@ def _nfs_proc_access():
             default_value=b'\x01\x00\x07\x00\x00\x01\x00\x00\x00\x00\x00\x00\xef\x40\xe7\x82' \
                           b'\xae\x34\x01\xab\x00\x00\x00\x00\x00\x00\x00\x00',
         ),
-        DWord('check-access', default_value=0x1f, endian='>', fuzzable=False),
+        DWord('check-access', default_value=0x1f, endian='>', fuzzable=True),
     ))
 
 def _nfs_proc_read():
@@ -340,6 +340,75 @@ def _nfs_proc_create():
         _nfs_object()
     ))
 
+def _nfs_proc_mkdir():
+    return Block('NFS-MKDIR', children=(
+        # where
+        # -- dir
+        Size('dir-length', block_name='filehandle', endian='>', length=4, fuzzable=False),
+        Bytes(
+            'filehandle', size=28, fuzzable=True,
+            default_value=b'\x01\x00\x07\x00\x00\x01\x00\x00\x00\x00\x00\x00\xef\x40\xe7\x82' \
+                          b'\xae\x34\x01\xab\x00\x00\x00\x00\x00\x00\x00\x00',
+        ),
+
+        # -- name
+        Size('name-length', block_name='contents', endian='>', length=4, fuzzable=False),
+        String('contents', default_value='abcdabcd', encoding='ascii', fuzzable=True),
+
+        # attributes
+        _nfs_new_attributes()
+    ))
+
+def _nfs_proc_symlink():
+    return Block('NFS-SYMLINK', children=(
+        # where
+        # -- dir
+        Size('dir-length', block_name='filehandle', endian='>', length=4, fuzzable=False),
+        Bytes(
+            'filehandle', size=28, fuzzable=True,
+            default_value=b'\x01\x00\x07\x00\x00\x01\x00\x00\x00\x00\x00\x00\xef\x40\xe7\x82' \
+                          b'\xae\x34\x01\xab\x00\x00\x00\x00\x00\x00\x00\x00',
+        ),
+
+        # -- name
+        Size('name-length', block_name='contents', endian='>', length=4, fuzzable=False),
+        String('contents', default_value='abcdabcd', encoding='ascii', fuzzable=True),
+
+        # attributes
+        _nfs_new_attributes(),
+
+        # To
+        Size('to-name-length', block_name='contents', endian='>', length=4, fuzzable=False),
+        String('to-contents', default_value='lkjsdf', encoding='ascii', fuzzable=True),
+    ))
+
+def _nfs_proc_mknod():
+    pass
+
+def _nfs_proc_remove():
+    return Block('NFS-REMOVE', children=(
+        _nfs_object()
+    ))
+
+def _nfs_proc_rmdir():
+    return Block('NFS-RMDIR', children=(
+        _nfs_object()
+    ))
+
+def _nfs_proc_rename():
+    return Block('NFS-RENAME', children=(
+        # from
+        _nfs_object(),
+        # to
+        _nfs_object(),
+    ))
+
+def _nfs_proc_link():
+    pass
+
+def _nfs_proc_readdir():
+    pass
+
 def _nfs_proc_readdirplus():
     return Block('NFS-READDIRPLUS', children=(
         # -- dir
@@ -350,13 +419,22 @@ def _nfs_proc_readdirplus():
                           b'\xae\x34\x01\xab\x00\x00\x00\x00\x00\x00\x00\x00',
         ),
         QWord('cookie', default_value=0, endian='>', fuzzable=True),
-        QWord('verifier', default_value=0, endian='>', fuzzable=False),
-        DWord('dircount', default_value=512, endian='>', fuzzable=False),
-        DWord('maxcount', default_value=4096, endian='>', fuzzable=False),
+        QWord('verifier', default_value=0, endian='>', fuzzable=True),
+        DWord('dircount', default_value=512, endian='>', fuzzable=True),
+        DWord('maxcount', default_value=4096, endian='>', fuzzable=True),
     ))
 
 def _nfs_proc_fsstat():
     return _nfs_object()
+
+def _nfs_proc_fsinfo():
+    pass
+
+def _nfs_proc_pathconf():
+    pass
+
+def _nfs_proc_commit():
+    pass
 
 def _nfs_object(filehandle=None):
     return Block('NFS-Object', children=(

@@ -9,7 +9,7 @@ import collections
 import paramiko
 
 # If these keywords appears in the log content, we assumes there is a crash.
-CRASH_KEYWORDS = ['nfsd: got error', 'segfault']
+CRASH_KEYWORDS = ['nfsd: got error', 'segfault', 'general protection']
 
 class LogMonitor(BaseMonitor):
     def __init__(self, host, port, user='admin', pkey_file='/home/peng/.ssh/id_rsa'):
